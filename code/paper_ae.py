@@ -34,8 +34,8 @@ ids=pd.read_csv(ids_path,index_col=0)
 randomized_ids = ids.sample(frac=1).reset_index(drop=True)
 
 
-ids_test=randomized_ids[:197]
-ids_train=randomized_ids[197:]
+ids_test=randomized_ids[:227]
+ids_train=randomized_ids[227:]
 ids_test.to_csv(out_dir+'ids_test.csv')#,index=False)
 ids_train.to_csv(out_dir+'ids_train.csv')
 
@@ -99,7 +99,7 @@ y = torch.tensor(y_train[['age', 'sex']].values, dtype=torch.float32)#.to(device
 torch.cuda.empty_cache()
 print(torch.cuda.memory_allocated())
 # DataLoader setup
-batch_size = 10
+batch_size = 32
 train_dataset = TensorDataset(x_norm, y)
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 del x_norm
@@ -129,12 +129,14 @@ class Encoder(nn.Module):
             self.batch_norms.append(nn.BatchNorm3d(n_neurons_layer))
             self.dropouts.append(nn.Dropout(dropout_level))
             input_channels = n_neurons_layer
-        
+        self.bn_latent=nn.BatchNorm1d(z_dim)
         self.flatten = nn.Flatten()
         self.len_flatten=int(np.prod(n_features[1:])/(8**len(h_dim)))
         self.latent_layer = nn.Linear(self.len_flatten*h_dim[-1], z_dim)  # flattening to match dense input size
         self.observed_age = nn.Linear(z_dim, 1)
         self.observed_sex = nn.Linear(z_dim, 1)
+        torch.nn.init.xavier_uniform_(self.observed_sex.weight, gain=1.0)  # Small weights
+        torch.nn.init.zeros_(self.observed_sex.bias)  # Zero bias
 
     def forward(self, x):
         # Add Gaussian noise
@@ -151,10 +153,10 @@ class Encoder(nn.Module):
         # Flatten the output and apply the dense latent layer
         x = self.flatten(x)
         latent = self.latent_layer(x)
-        
+        latent_sex=self.bn_latent(latent)
         # Compute observed variables: age and sex
         observed_age = F.relu(self.observed_age(latent))
-        observed_sex = torch.sigmoid(self.observed_sex(latent))
+        observed_sex = torch.tanh(self.observed_sex(latent_sex))
         
         observed = torch.cat([observed_age, observed_sex], dim=-1)  # concatenate age and sex
         return latent, observed
@@ -180,6 +182,7 @@ class Decoder(nn.Module):
         
         # Final Conv3D layer to output the reconstructed 3D image
         self.final_conv = nn.Conv3d(h_dim[-1], 1, kernel_size=3, padding=1)  # Outputting 1 channel
+        # Reinitialize observed_sex weights and biases
 
     def forward(self, x):
         # Fully connected layer to reshape the latent vector into the latent 3D feature map
@@ -203,8 +206,8 @@ n_features =  (1,)+shape[1:]
 # h1_dim = [(1,64),(64,32),(32,16),(16,1)]#encoder number of nodes per layer
 # h2_dim=[(16,32),(32,32),(32,32)]#decoder number of nodes per layer
 
-h1_dim=[64,32,16]
-h2_dim=[16,32,64]
+h1_dim=[128,32,16]
+h2_dim=[16,32,128]
 z_dim = 10# latent nodes
 # Define models (need to rewrite hr_encoder_model and hr_decoder_model for PyTorch)
 print(torch.cuda.memory_allocated())
@@ -304,7 +307,7 @@ loss_df = pd.DataFrame(columns=["Epoch",
                                 "Train_Recon_Loss", "Train_MAE_Loss", "Train_Bin_Loss", "Train_Total_Loss",
                                 "Val_Recon_Loss", "Val_MAE_Loss", "Val_Bin_Loss", "Val_Total_Loss"])
 
-n_epochs = 200
+n_epochs =20
 validation_ratio = 0.05  # Percentage of training batches used for validation
 
 for epoch in range(n_epochs):
