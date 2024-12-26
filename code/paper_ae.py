@@ -34,8 +34,8 @@ ids=pd.read_csv(ids_path,index_col=0)
 randomized_ids = ids.sample(frac=1).reset_index(drop=True)
 
 
-ids_test=randomized_ids[:200]
-ids_train=randomized_ids[200:]
+ids_test=randomized_ids[:197]
+ids_train=randomized_ids[197:]
 ids_test.to_csv(out_dir+'ids_test.csv')#,index=False)
 ids_train.to_csv(out_dir+'ids_train.csv')
 
@@ -205,7 +205,7 @@ n_features =  (1,)+shape[1:]
 
 h1_dim=[64,32,16]
 h2_dim=[16,32,64]
-z_dim = 12 # latent nodes
+z_dim = 10# latent nodes
 # Define models (need to rewrite hr_encoder_model and hr_decoder_model for PyTorch)
 print(torch.cuda.memory_allocated())
 encoder = Encoder( n_features,h1_dim, z_dim).to(device)
@@ -229,6 +229,8 @@ bin_loss_fn = nn.BCEWithLogitsLoss()
 
 print(torch.cuda.memory_allocated())
 #%%%% train def
+l1_lambda=0.01
+l2_lambda=0.01
 
 def train_on_batch(batch_x, batch_y):
     # Ensure models are in training mode
@@ -248,10 +250,16 @@ def train_on_batch(batch_x, batch_y):
     # Calculate supervised losses
     mae_loss = mae_loss_fn(batch_y[:, :1], batch_observed[:, :1])  # For age
     bin_loss = bin_loss_fn(batch_y[:, 1:], batch_observed[:, 1:])  # For sex (binary classification)
-
+    l1_reg = sum(l1_lambda * torch.sum(torch.abs(param))
+    for name, param in encoder.named_parameters()
+    if param.requires_grad and "bias" not in name)
+    l2_reg = sum(l2_lambda * torch.sum(param ** 2)
+    for name, param in encoder.named_parameters()
+    if param.requires_grad and "bias" not in name)
     # Weighted combined loss
     #supervised_loss = mae_loss + bin_loss
-    ae_loss = lambda_ * 100 * recon_loss +  mae_loss + lambda_ * 100 *bin_loss
+    ae_loss = lambda_ * 100 * recon_loss +  mae_loss + lambda_ * 100 *bin_loss+ l1_reg + l2_reg
+
 
     # Backward pass and optimization step
     ae_loss.backward()
@@ -322,21 +330,22 @@ for epoch in range(n_epochs):
             total_train_mae_loss += mae_loss
             total_train_bin_loss += bin_loss
         else:  # Validation portion
-            encoder.eval()
-            decoder.eval()
+            val_loss,val_recon_loss,val_mae_loss,val_bin_loss=validate_on_batch(batch_x, batch_y)
+            # encoder.eval()
+            # decoder.eval()
 
-            with torch.no_grad():
-                # Perform validation
-                batch_latent, batch_observed = encoder(batch_x)
-                batch_reconstruction = decoder(batch_latent)
+            # with torch.no_grad():
+            #     # Perform validation
+            #     batch_latent, batch_observed = encoder(batch_x)
+            #     batch_reconstruction = decoder(batch_latent)
 
-                val_recon_loss = mse_loss_fn(batch_x, batch_reconstruction).item()
-                val_mae_loss = mae_loss_fn(batch_y[:, :1], batch_observed[:, :1]).item()
-                val_bin_loss = bin_loss_fn(batch_y[:, 1:], batch_observed[:, 1:]).item()
+            #     val_recon_loss = mse_loss_fn(batch_x, batch_reconstruction).item()
+            #     val_mae_loss = mae_loss_fn(batch_y[:, :1], batch_observed[:, :1]).item()
+            #     val_bin_loss = bin_loss_fn(batch_y[:, 1:], batch_observed[:, 1:]).item()
 
-                total_val_recon_loss += val_recon_loss
-                total_val_mae_loss += val_mae_loss
-                total_val_bin_loss += val_bin_loss
+            total_val_recon_loss += val_recon_loss
+            total_val_mae_loss += val_mae_loss
+            total_val_bin_loss += val_bin_loss
 
     # Calculate averages
     num_train_batches = len(train_loader) * (1 - validation_ratio)
@@ -372,30 +381,7 @@ for epoch in range(n_epochs):
 
 # Save the DataFrame to a CSV file
 loss_df.to_csv(out_dir+"training_validation_losses.csv", index=False)
-#%%
-# Training loop
-# n_epochs = 200
-# for epoch in range(n_epochs):
-#     total_recon_loss = 0
-#     total_supervised_loss = 0
-#     #print(torch.cuda.memory_allocated())
-#     for batch_x, batch_y in train_loader:
-#         batch_x = batch_x.to(device)
-#         batch_y = batch_y.to(device)
 
-#         ae_loss, recon_loss, mae_loss, bin_loss = train_on_batch(batch_x, batch_y)
-#         total_recon_loss += recon_loss
-#         total_supervised_loss += mae_loss+ bin_loss
-
-#         torch.cuda.empty_cache()
-
-#         # Synchronize the CUDA device
-#         torch.cuda.synchronize()
-
-#     avg_recon_loss = total_recon_loss / len(train_loader)
-#     avg_supervised_loss = total_supervised_loss / len(train_loader)
-
-#     print(f'Epoch [{epoch + 1}/{n_epochs}], Reconstruction Loss: {avg_recon_loss:.4f}, Supervised Loss: {avg_supervised_loss:.4f}')
 #%%
 # Save models and other results
 torch.save(encoder.state_dict(), out_dir+'model_encoder.pth')
