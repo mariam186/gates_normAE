@@ -112,7 +112,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 class Encoder(nn.Module):
-    def __init__(self, n_features, h_dim, z_dim, stddev=0.1, dropout_level=0.1):
+    def __init__(self, n_features, h_dim, z_dim, stddev=0.05, dropout_level=0.1):
         super(Encoder, self).__init__()
         
         # Gaussian noise layer (as a parameter, but it will behave differently in training)
@@ -374,28 +374,28 @@ for epoch in range(n_epochs):
 loss_df.to_csv(out_dir+"training_validation_losses.csv", index=False)
 #%%
 # Training loop
-n_epochs = 200
-for epoch in range(n_epochs):
-    total_recon_loss = 0
-    total_supervised_loss = 0
-    #print(torch.cuda.memory_allocated())
-    for batch_x, batch_y in train_loader:
-        batch_x = batch_x.to(device)
-        batch_y = batch_y.to(device)
+# n_epochs = 200
+# for epoch in range(n_epochs):
+#     total_recon_loss = 0
+#     total_supervised_loss = 0
+#     #print(torch.cuda.memory_allocated())
+#     for batch_x, batch_y in train_loader:
+#         batch_x = batch_x.to(device)
+#         batch_y = batch_y.to(device)
 
-        ae_loss, recon_loss, mae_loss, bin_loss = train_on_batch(batch_x, batch_y)
-        total_recon_loss += recon_loss
-        total_supervised_loss += mae_loss+ bin_loss
+#         ae_loss, recon_loss, mae_loss, bin_loss = train_on_batch(batch_x, batch_y)
+#         total_recon_loss += recon_loss
+#         total_supervised_loss += mae_loss+ bin_loss
 
-        torch.cuda.empty_cache()
+#         torch.cuda.empty_cache()
 
-        # Synchronize the CUDA device
-        torch.cuda.synchronize()
+#         # Synchronize the CUDA device
+#         torch.cuda.synchronize()
 
-    avg_recon_loss = total_recon_loss / len(train_loader)
-    avg_supervised_loss = total_supervised_loss / len(train_loader)
+#     avg_recon_loss = total_recon_loss / len(train_loader)
+#     avg_supervised_loss = total_supervised_loss / len(train_loader)
 
-    print(f'Epoch [{epoch + 1}/{n_epochs}], Reconstruction Loss: {avg_recon_loss:.4f}, Supervised Loss: {avg_supervised_loss:.4f}')
+#     print(f'Epoch [{epoch + 1}/{n_epochs}], Reconstruction Loss: {avg_recon_loss:.4f}, Supervised Loss: {avg_supervised_loss:.4f}')
 #%%
 # Save models and other results
 torch.save(encoder.state_dict(), out_dir+'model_encoder.pth')
