@@ -25,7 +25,7 @@ print("Using device:", device)
 #%% Loading data
 main_path="/project_cephfs/3022017.06/projects/marzab/normVAE"
 data_path="/project/3022027.01/Gates_old/data/BAMBAM_BMGF/"
-out_dir=main_path+ "/results/run1/"
+out_dir=main_path+ "/results/run2/"
 os.makedirs(out_dir,exist_ok=True)
 ids_path='/project_cephfs/3022017.06/projects/marzab/normVAE/data/clean_ids.csv'
 
@@ -99,7 +99,7 @@ y = torch.tensor(y_train[['age', 'sex']].values, dtype=torch.float32)#.to(device
 torch.cuda.empty_cache()
 print(torch.cuda.memory_allocated())
 # DataLoader setup
-batch_size = 32
+batch_size = 20
 train_dataset = TensorDataset(x_norm, y)
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 del x_norm
@@ -153,11 +153,11 @@ class Encoder(nn.Module):
         # Flatten the output and apply the dense latent layer
         x = self.flatten(x)
         latent = self.latent_layer(x)
-        latent_sex=self.bn_latent(latent)
+        #latent_sex=self.bn_latent(latent)
         # Compute observed variables: age and sex
         observed_age = F.relu(self.observed_age(latent))
-        observed_sex = torch.tanh(self.observed_sex(latent_sex))
-        
+        observed_sex = self.observed_sex(latent)#torch.clamp(self.observed_sex(latent),min=-10,max=10)
+    
         observed = torch.cat([observed_age, observed_sex], dim=-1)  # concatenate age and sex
         return latent, observed
 #%% models.py:decoder
@@ -220,14 +220,14 @@ print(torch.cuda.memory_allocated())
 # Optimizer
 lambda_ = 1
 base_lr = 0.001# learning ratebase_lr = 0.001
-optimizer = optim.Adam(list(encoder.parameters()) + list(decoder.parameters()), lr=base_lr)
+optimizer = optim.Adam(list(encoder.parameters()) + list(decoder.parameters()), lr=base_lr,weight_decay=1e-4)
 print(torch.cuda.memory_allocated())
 
 #%%
 # Loss functions
 mse_loss_fn = nn.MSELoss()
 mae_loss_fn = nn.L1Loss()
-bin_loss_fn = nn.BCEWithLogitsLoss()
+bin_loss_fn = nn.BCEWithLogitsLoss(reduction='mean')
 
 
 print(torch.cuda.memory_allocated())
@@ -252,22 +252,31 @@ def train_on_batch(batch_x, batch_y):
 
     # Calculate supervised losses
     mae_loss = mae_loss_fn(batch_y[:, :1], batch_observed[:, :1])  # For age
-    bin_loss = bin_loss_fn(batch_y[:, 1:], batch_observed[:, 1:])  # For sex (binary classification)
-    l1_reg = sum(l1_lambda * torch.sum(torch.abs(param))
-    for name, param in encoder.named_parameters()
-    if param.requires_grad and "bias" not in name)
-    l2_reg = sum(l2_lambda * torch.sum(param ** 2)
-    for name, param in encoder.named_parameters()
-    if param.requires_grad and "bias" not in name)
+    bin_loss = bin_loss_fn(batch_observed[:, 1:],batch_y[:, 1:])  # For sex (binary classification)
+    # l1_reg = sum(l1_lambda * torch.sum(torch.abs(param))
+    # for name, param in encoder.named_parameters()
+    # if param.requires_grad and "bias" not in name)
+    # l2_reg = sum(l2_lambda * torch.sum(param ** 2)
+    # for name, param in encoder.named_parameters()
+    # if param.requires_grad and "bias" not in name)
     # Weighted combined loss
     #supervised_loss = mae_loss + bin_loss
-    ae_loss = lambda_ * 100 * recon_loss +  mae_loss + lambda_ * 100 *bin_loss+ l1_reg + l2_reg
+    #ae_loss = lambda_ * 100 * recon_loss +  mae_loss + lambda_ * 100 *bin_loss#+ l1_reg + l2_reg
 
 
     # Backward pass and optimization step
+    #ae_loss.backward()
+    #optimizer.step()
+    # Adjust loss weights
+    ae_loss = lambda_ * 100 * recon_loss + mae_loss + 10 * bin_loss
+    
+    # Targeted L2 regularization for observed_sex
+    l2_reg_sex = torch.sum(encoder.observed_sex.weight ** 2) * l2_lambda
+    ae_loss += l2_reg_sex
+    
     ae_loss.backward()
+    torch.nn.utils.clip_grad_norm_(encoder.parameters(), max_norm=1.0)  # Gradient clipping
     optimizer.step()
-
     # Clean up unnecessary tensors to save memory
     del batch_reconstruction, batch_x
 
@@ -290,11 +299,11 @@ def validate_on_batch(batch_x, batch_y):
 
         # Calculate supervised losses
         mae_loss = mae_loss_fn(batch_y[:, :1], batch_observed[:, :1])  # For age
-        bin_loss = bin_loss_fn(batch_y[:, 1:], batch_observed[:, 1:])  # For sex (binary classification)
+        bin_loss = bin_loss_fn( batch_observed[:, 1:],batch_y[:, 1:])  # For sex (binary classification)
 
         # Weighted combined loss
         #supervised_loss = mae_loss + bin_loss
-        ae_loss = lambda_ * 100 * recon_loss + mae_loss +lambda_ * 100 *  bin_loss
+        ae_loss = lambda_ * 100 * recon_loss + mae_loss +lambda_ *100* bin_loss
 
     return ae_loss.item(), recon_loss.item(), mae_loss.item(), bin_loss.item()
 
@@ -307,7 +316,7 @@ loss_df = pd.DataFrame(columns=["Epoch",
                                 "Train_Recon_Loss", "Train_MAE_Loss", "Train_Bin_Loss", "Train_Total_Loss",
                                 "Val_Recon_Loss", "Val_MAE_Loss", "Val_Bin_Loss", "Val_Total_Loss"])
 
-n_epochs =20
+n_epochs =200
 validation_ratio = 0.05  # Percentage of training batches used for validation
 
 for epoch in range(n_epochs):
@@ -324,8 +333,8 @@ for epoch in range(n_epochs):
         batch_y = batch_y.to(device)
 
         if i < len(train_loader) * (1 - validation_ratio):  # Training portion
-            encoder.train()
-            decoder.train()
+           # encoder.train()
+           # decoder.train()
             
             # Perform training
             ae_loss, recon_loss, mae_loss, bin_loss = train_on_batch(batch_x, batch_y)
